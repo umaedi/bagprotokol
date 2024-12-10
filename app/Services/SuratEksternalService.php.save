@@ -1,0 +1,151 @@
+<?php
+
+namespace App\Services;
+
+use App\Models\Disposisis;
+use App\Models\OPD;
+use App\Models\Settings;
+use App\Models\SuratEksternal;
+use App\Models\TandaTangan;
+use App\Models\User;
+use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
+use SimpleSoftwareIO\QrCode\Facades\QrCode;
+use Vinkla\Hashids\Facades\Hashids;
+
+class SuratEksternalService {
+    public function update($id, $data)
+    {
+        $surat = SuratEksternal::find($id);
+        if(isset($data['eks_file_lampiran'])){
+            if ($data['eks_file_lampiran'] != null && $surat->eks_file_lampiran != null && Storage::exists($surat->eks_file_lampiran)) {
+                Storage::delete($surat->eks_file_lampiran);
+            }
+            $data['eks_file_lampiran'] = Storage::putFile('public/lampiran', $data['eks_file_lampiran']);
+        }
+        if($data['eks_status'] == 'Disposisi') {
+            /*$dataTujuan = (array)$data['tujuan']; // related ids
+            $pivotData = array_fill(0, count($dataTujuan), ['dis_tgl' => $data['dis_tgl'], 'dis_catatan' => $data['dis_catatan']]);
+            $syncData = array_combine($dataTujuan, $pivotData);*/
+
+
+            $surat->opds()->delete();
+            $arrTujuan = array();
+            foreach ($data['tujuan'] as $val) {
+                $tujuan = new Disposisis([
+                    'dis_tgl' => $data['dis_tgl'],
+                    'dis_tujuan' => $val,
+                    'dis_status' => 'Dikirim',
+                    'dis_catatan' => $data['dis_catatan'],
+                ]);
+
+                array_push($arrTujuan, $tujuan);
+            }
+
+            $surat->opds()->saveMany($arrTujuan);
+        }
+
+        unset($data['tujuan']);
+        unset($data['dis_tgl']);
+        unset($data['dis_catatan']);
+        $update = SuratEksternal::where('eks_id', $id)->update($data);
+        if($update)
+            return true;
+        else
+            return false;
+    }
+
+    public function create($data) {
+        if(isset($data['eks_file_lampiran'])){
+            $data['eks_file_lampiran'] = Storage::putFile('public/lampiran', $data['eks_file_lampiran']);
+        }
+
+        if ($data['eks_id_opd'] == 'lain') {
+            $data['eks_id_opd'] = null;
+        } else {
+            $data['eks_dari'] = null;
+        }
+        $data['eks_created_by'] = auth()->id();
+
+        $insert = SuratEksternal::create($data);
+
+            $url = url('surat/eksternal/detail/' . Hashids::encode($insert->eks_id));
+//QR BERWARNA            QrCode::format('png')->size(500)->color(255, 245, 0, 100)->backgroundColor(255, 0, 0, 100)->mergeString(Storage::get('public/images/LOGO_KABUPATEN_TULANG_BAWANG.png'))->generate($url, storage_path('app/public/qr/'.Hashids::encode($insert->id_qr).'.png'));
+            QrCode::format('png')->size(500)->merge(Storage::url('app/public/images/LOGO_KABUPATEN_TULANG_BAWANG.png'))->generate($url, storage_path('app/public/qr/eksternal/' . Hashids::encode($insert->eks_id) . '.png'));
+            $insert->eks_qrcode = 'public/qr/eksternal/' . Hashids::encode($insert->eks_id) . '.png';
+
+dd(pathinfo($data['eks_file_lampirandawdawdwa']
+            if (pathinfo($data['eks_file_lampiran']) == 'pdf') {
+                if (isset($data['eks_file_lampiran'])) {
+                    (new SuratKeluarService)->placeQRtoPDF($data['eks_file_lampiran'], $insert->eks_qrcode);
+                }
+            } else {
+                if (isset($data['eks_file_lampiran'])) {
+                    /*$src1 = new \Imagick(storage_path('app/'.$data['eks_file_lampiran']));
+                    $src2 = new \Imagick(storage_path('app/'.$insert->eks_qrcode));
+                    $src1->compositeImage($src2, \Imagick::COMPOSITE_MATHEMATICS, 0,0);
+                    $src1->writeImage(storage_path('app/'.$data['eks_file_lampiran']));*/
+                    list($width, $height) = getimagesize(storage_path('app/'.$insert->eks_qrcode));
+                    list($widthLam, $heightLam) = getimagesize(storage_path('app/'.$data['eks_file_lampiran']));
+                    $lampiran = imagecreatefromstring(file_get_contents(storage_path('app/'.$data['eks_file_lampiran'])));
+                    $qrCode = imagecreatefromstring(file_get_contents(storage_path('app/'.$insert->eks_qrcode)));
+                    $temp = imagecreatetruecolor(100, 100);
+                    imagecopyresampled($temp, $qrCode, 0, 0, 0, 0, 100, 100, $width, $height);
+                    imagecopymerge($lampiran, $temp, 5, $heightLam - 105,0,0, 100, 100, 100);
+                    imagepng($lampiran, storage_path('app/'.$data['eks_file_lampiran']));
+                }
+            }
+
+            $insert->save();
+//            $insert->opd()->attach($data['tujuan']);
+            if (isset($data['tujuan']) && count($data['tujuan']) > 0) {
+                $arrTujuan = array();
+                foreach ($data['tujuan'] as $val) {
+                    $tujuan = new Disposisis([
+                        'dis_tgl' => $data['dis_tgl'],
+                        'dis_tujuan' => $val,
+                        'dis_status' => 'Dikirim',
+                        'dis_catatan' => $data['dis_catatan'],
+                    ]);
+
+                    array_push($arrTujuan, $tujuan);
+                }
+
+                $insert->opds()->saveMany($arrTujuan);
+            }
+
+        return $insert;
+    }
+
+    public function delete($id) {
+        $surat = SuratEksternal::find($id);
+        if ($surat->eks_file_lampiran != null && Storage::exists($surat->eks_file_lampiran)) {
+            Storage::delete($surat->eks_file_lampiran);
+        }
+        $surat->disposisi()->delete();
+        $destroy = $surat->delete();
+        return $destroy;
+    }
+
+    public function deleteBulk($ids) {
+        $surat = SuratEksternal::whereIn('eks_id', $ids)->get(['eks_file_lampiran']);
+        foreach ($surat as $us) {
+            if ($us->eks_file_lampiran != null && Storage::exists($us->eks_file_lampiran)) {
+                Storage::delete($us->eks_file_lampiran);
+            }
+        }
+        $destroy = SuratEksternal::destroy($ids);
+        return $destroy;
+    }
+
+    public function statusBulk($status, $ids) {
+
+        $update = SuratEksternal::whereIn('eks_id', $ids)->update([
+            'eks_status' => $status
+        ]);
+
+        return $update;
+    }
+}
